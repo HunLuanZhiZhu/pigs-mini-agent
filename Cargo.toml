@@ -1,0 +1,33 @@
+[package]
+name = "pigs-mini-agent"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "教学版最简 Rust AI Agent —— 一个自包含的通用 Agent crate，用于理解 Agent 循环的核心原理"
+
+# 独立项目：不加入任何父级工作区（原为 pigs 工作区成员，2026-09-28 拆出）
+[workspace]
+
+[lib]
+name = "pigs_mini_agent"
+path = "src/lib.rs"
+
+[dependencies]
+# 异步运行时 —— Agent 循环和工具执行都需要异步
+tokio = { version = "1", features = ["full"] }
+# HTTP 客户端 —— 调用 LLM API
+reqwest = { version = "0.12", features = ["json", "stream"] }
+# 序列化/反序列化 —— 消息和工具参数的 JSON 处理
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 异步 trait —— Tool trait 的 async fn 需要
+async-trait = "0.1"
+# 错误类型派生 —— 用 thiserror 自动实现 Display 和 From
+thiserror = "1"
+
+[dev-dependencies]
+# 临时文件/目录 —— 工具测试需要创建临时文件
+tempfile = "3"
+# 测试用异步运行时
+tokio = { version = "1", features = ["test-util"] }
