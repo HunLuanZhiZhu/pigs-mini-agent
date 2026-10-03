@@ -1,168 +1,337 @@
-# Pigs Mini Agent —— 教学版最简 Rust AI Agent
+<div align="center">
 
-> "把 Claude Code 或 Cursor 剥到底，核心就是一个套着大模型的 `while` 循环，加七八个让它能动手的工具。"
-> —— CoreCoder README
+<img src="./assets/pigs-mini-agent-banner.svg" width="100%" alt="pigs-mini-agent — a minimal Rust AI Agent for learning how agents work" />
 
-这个 crate 是一个**自包含的、教学导向的**通用 AI Agent 实现。不到 2000 行 Rust 代码，没有任何黑魔法。
+<br/>
 
-## 这个 crate 是什么？
+<a href="./READMEch.md"><img src="https://img.shields.io/badge/中文文档-READMEch.md-2563EB?style=for-the-badge" alt="Chinese README"/></a>
+<a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust_2021-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust 2021"/></a>
+<img src="https://img.shields.io/badge/version-0.1.0-7C3AED?style=for-the-badge" alt="version 0.1.0"/>
+<img src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge" alt="MIT License"/>
 
-它是 AI Agent 的"nanoGPT"——用最少的代码展示 Agent 最核心的工作原理。如果你想知道 Claude Code、Cursor、Codex 这些工具"底下到底在干什么"，读这个 crate 就够了。
+<br/><br/>
 
-## 核心概念
+**A small, self-contained teaching implementation of a general-purpose AI Agent in Rust.**
 
-Agent 的核心就是一个循环：
+</div>
 
-```
-┌──────────────────────────────────────────────────┐
-│                Agent 核心循环                      │
-│                                                   │
-│  1. 用户发消息 ──→ 加入对话历史                      │
-│                      │                            │
-│  2. 调用 LLM ◄───────┘                            │
-│     （把历史 + 工具列表发给大模型）                    │
-│                      │                            │
-│  3. LLM 回复 ────────┘                            │
-│     ├── 纯文本 ──→ 返回给用户 ✓ 完成                 │
-│     └── 工具调用 ──→ 执行工具 ──→ 结果加入历史        │
-│                      │                            │
-│  4. 回到步骤 2 ↺ 循环                               │
-└──────────────────────────────────────────────────┘
-```
+---
 
-就这么简单。Agent 的"智能"来自 LLM（大语言模型），Agent 代码本身不做任何决策——它只是忠实地执行循环。
+## What is this?
 
-## 快速开始
+pigs-mini-agent is meant to answer one question:
 
-```bash
-# 1. 设置 API 密钥（任选一个供应商）
+> **What is actually happening underneath tools like Claude Code, Cursor, or Codex?**
+
+At the core, an Agent is surprisingly small:
+
+~~~text
+user message
+    │
+    ▼
+conversation history
+    │
+    ▼
+call the LLM
+    │
+    ├── text only ───────────────► return to user
+    │
+    └── tool call
+            │
+            ▼
+        execute tool
+            │
+            ▼
+      append tool result
+            │
+            └──────────────► call the LLM again
+~~~
+
+The intelligence comes from the **LLM**.  
+The Agent runtime mainly provides **memory, tools, execution, and the loop**.
+
+This crate keeps that loop visible instead of hiding it behind a large framework.
+
+---
+
+## Why this project exists
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+### 🧠 Learn the loop
+Read a compact implementation of the full Agent control flow.
+
+</td>
+<td width="33%" valign="top">
+
+### 🛠️ Learn tool use
+See how tool schemas, tool calls, execution, and tool results connect together.
+
+</td>
+<td width="33%" valign="top">
+
+### 🦀 Learn it in Rust
+Use async Rust, enums, traits, typed errors, and HTTP APIs in a real Agent example.
+
+</td>
+</tr>
+</table>
+
+The project is intentionally **self-contained**. You do not need to jump across a multi-crate workspace to understand the full path from user input to LLM tool use.
+
+---
+
+## Core architecture
+
+~~~text
+┌─────────────────────────────────────────────────────────────┐
+│                       Agent::chat()                         │
+│                                                             │
+│  user input ─► messages ─► LlmClient::chat()               │
+│                               │                             │
+│                               ▼                             │
+│                    OpenAI-compatible API                    │
+│                               │                             │
+│                      ┌────────┴────────┐                    │
+│                      ▼                 ▼                    │
+│                  text reply        tool_calls               │
+│                      │                 │                    │
+│                      │                 ▼                    │
+│                      │           ToolRegistry               │
+│                      │                 │                    │
+│                      │        ┌────────┼────────┐           │
+│                      │        ▼        ▼        ▼           │
+│                      │      bash   read/write   edit        │
+│                      │        │        │        │           │
+│                      │        └────────┼────────┘           │
+│                      │                 ▼                    │
+│                      │           tool results               │
+│                      │                 │                    │
+│                      └──── finish ◄────┴── continue loop    │
+└─────────────────────────────────────────────────────────────┘
+~~~
+
+The loop is bounded: the default maximum is **50 rounds**, preventing an Agent from running forever if the model gets stuck repeatedly calling tools.
+
+---
+
+## Built-in tools
+
+| Tool | Purpose | Design note |
+|---|---|---|
+| <code>bash</code> | Execute shell commands | Gives the Agent a general execution primitive |
+| <code>read_file</code> | Read files with line-oriented output | Lets the model inspect local context |
+| <code>write_file</code> | Create / overwrite files and parent directories | Minimal file creation primitive |
+| <code>edit_file</code> | Replace one uniquely matched text fragment | Avoids fragile line-number editing |
+
+### Why does <code>edit_file</code> use unique text matching?
+
+Line numbers are a poor interface for LLM editing: the model can count incorrectly, and the target can shift after previous edits.
+
+Instead, <code>edit_file</code> takes:
+
+~~~text
+old_string → new_string
+~~~
+
+The old text must match exactly once. If it is ambiguous, the model has to provide more surrounding context.
+
+That makes failures explicit and successful edits easier to verify.
+
+---
+
+## Quick start
+
+### 1. Set an API key
+
+~~~bash
 export OPENAI_API_KEY="sk-xxxx"
+~~~
 
-# 2. 运行示例
+### 2. Run the interactive example
+
+~~~bash
 cargo run --example chat
-```
+~~~
 
-支持任何 OpenAI 兼容供应商：
+Optional configuration:
 
-```bash
-# OpenAI
+~~~bash
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 export OPENAI_MODEL="gpt-4o"
+~~~
 
+The LLM client uses the **OpenAI-compatible Chat Completions API**, so it can also work with compatible providers such as DeepSeek, Qwen, Kimi, Ollama, and similar gateways.
+
+Examples:
+
+~~~bash
 # DeepSeek
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export OPENAI_MODEL="deepseek-chat"
 
-# Qwen (通义千问)
+# Qwen
 export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 export OPENAI_MODEL="qwen-plus"
 
-# Ollama (本地)
+# Ollama
 export OPENAI_BASE_URL="http://localhost:11434/v1"
 export OPENAI_MODEL="llama3"
-```
+~~~
 
-## 代码示例
+---
 
-```rust
-use pigs_mini_agent::{Agent, LlmClient, create_default_tools};
+## Minimal code
+
+~~~rust
+use pigs_mini_agent::{create_default_tools, Agent, LlmClient};
 
 #[tokio::main]
 async fn main() -> pigs_mini_agent::Result<()> {
-    // 1. 创建 LLM 客户端
     let llm = LlmClient::from_env()?;
-    // 2. 创建工具集（bash, read_file, write_file, edit_file）
     let tools = create_default_tools();
-    // 3. 创建 Agent
     let mut agent = Agent::new(llm, tools);
-    // 4. 聊天！
-    let response = agent.chat("帮我创建一个 hello.txt 文件").await?;
+
+    let response = agent
+        .chat("Create a hello.txt file containing Hello, Agent!")
+        .await?;
+
     println!("{response}");
     Ok(())
 }
-```
+~~~
 
-## 教学文档
+That is enough to create a working tool-using Agent.
 
-本 crate 有三层文档：
+---
 
-| 层级 | 路径 | 说明 |
+## LLM client behavior
+
+The built-in <code>LlmClient</code> deliberately keeps the protocol simple:
+
+- OpenAI-compatible **Chat Completions** only;
+- non-streaming responses;
+- tool calling via the standard <code>tools</code> / <code>tool_calls</code> fields;
+- a 120-second HTTP timeout;
+- retry on HTTP <code>429</code> and server-side <code>5xx</code> failures;
+- exponential backoff;
+- up to 3 retries for retryable requests.
+
+Non-streaming responses are a teaching choice. Streaming tool calls require reconstructing fragmented tool arguments from SSE deltas, which obscures the Agent loop with transport complexity.
+
+---
+
+## Learning path
+
+The repository is organized so you can read it from data structures to the main loop:
+
+| Order | File | What to learn |
 |---|---|---|
-| **HTML 站点**（推荐） | [`docs/html/index.html`](docs/html/index.html) | 深色「Terminal Codex」风格；每章末尾有源码拆解 |
-| Markdown 章节 | [`docs/`](docs/) | `00`…`07`；每章含概念说明 + **源码拆解** |
-| 拆解片段源 | [`docs/_walkthroughs/`](docs/_walkthroughs/) | 拼进 MD/HTML 的详细代码导读 |
-| API 文档 | `cargo doc -p pigs-mini-agent --open` | 由源码 `///` 注释生成 |
+| 1 | [<code>src/message.rs</code>](./src/message.rs) | Conversation history and message representation |
+| 2 | [<code>src/tool.rs</code>](./src/tool.rs) | The <code>Tool</code> trait and <code>ToolRegistry</code> |
+| 3 | [<code>src/prompt.rs</code>](./src/prompt.rs) | How the system prompt describes behavior and tools |
+| 4 | [<code>src/llm.rs</code>](./src/llm.rs) | Building requests and parsing LLM responses |
+| 5 | [<code>src/tools/</code>](./src/tools) | Concrete tool implementations |
+| 6 | [<code>src/agent.rs</code>](./src/agent.rs) | **The Agent loop — the heart of the project** |
+| 7 | [<code>src/error.rs</code>](./src/error.rs) | Typed error handling |
+| 8 | [<code>src/lib.rs</code>](./src/lib.rs) | Public crate surface and module structure |
 
-在浏览器中打开 HTML 总览：
+---
 
-```bash
-# Windows
-start crates/pigs-mini-agent/docs/html/index.html
+## Teaching documentation
 
-# macOS
-open crates/pigs-mini-agent/docs/html/index.html
+The project includes several levels of documentation:
 
-# Linux
-xdg-open crates/pigs-mini-agent/docs/html/index.html
-```
+<table>
+<tr>
+<td width="33%" valign="top">
 
-快捷键：`←` / `→` 在章节间翻页。
+### 🌐 HTML guide
+[<code>docs/html/</code>](./docs/html)
 
-## 文件结构与阅读顺序
+A browser-readable teaching site with a terminal-style visual design.
 
-建议按以下顺序阅读，从简单到核心：
+</td>
+<td width="33%" valign="top">
 
-| 顺序 | 文件 | 内容 | 行数 |
-|---|---|---|---|
-| 1 | `src/message.rs` | 消息模型——对话历史的数据结构 | ~230 |
-| 2 | `src/tool.rs` | 工具系统——`Tool` trait 和 `ToolRegistry` | ~250 |
-| 3 | `src/prompt.rs` | 系统提示词——如何"设定" Agent 的行为 | ~130 |
-| 4 | `src/llm.rs` | LLM 客户端——如何与大模型 API 交互 | ~310 |
-| 5 | `src/tools/` | 4 个内置工具的具体实现 | ~480 |
-| 6 | `src/agent.rs` | **Agent 循环核心——这是心脏** | ~260 |
-| 7 | `src/error.rs` | 错误处理——Rust 的错误处理模式 | ~130 |
-| 8 | `src/lib.rs` | 模块声明和 crate 级文档 | ~100 |
+### 📖 Markdown chapters
+[<code>docs/00-overview.md</code>](./docs/00-overview.md) → [<code>docs/07-error.md</code>](./docs/07-error.md)
 
-## 内置工具
+Step-by-step conceptual chapters with source walkthroughs.
 
-| 工具 | 功能 | 借鉴来源 |
-|---|---|---|
-| `bash` | 执行 shell 命令 | CoreCoder `bash.py` + pigs-tools `bash.rs` |
-| `read_file` | 读取文件内容（带行号） | CoreCoder `read.py` |
-| `write_file` | 写入文件（自动创建父目录） | CoreCoder `write.py` |
-| `edit_file` | 搜索替换编辑（唯一匹配） | CoreCoder `edit.py`（核心创新） |
+</td>
+<td width="33%" valign="top">
 
-### 为什么 edit_file 用唯一匹配而非行号？
+### 🦀 Rust API docs
 
-来自 CoreCoder 的设计哲学：
+~~~bash
+cargo doc --open
+~~~
 
-> "行号是陷阱，模型数错一行就悄悄改错地方。用唯一片段锚定，失败可恢复、成功可验证。"
+Generated directly from the extensive source comments.
 
-`edit_file` 要求 LLM 提供 `old_string`（要替换的文本）和 `new_string`（替换后的文本）。如果 `old_string` 在文件中不唯一，LLM 需要加入更多上下文使其唯一。比行号定位更可靠——LLM 经常数错行号。
+</td>
+</tr>
+</table>
 
-## 设计决策
+Recommended starting point: **[docs/00-overview.md](./docs/00-overview.md)**.
 
-### 为什么自包含？
+---
 
-不依赖 `pigs-core`、`pigs-llm` 等其他 crate。读者只看这一个 crate 就能理解完整 Agent 循环，不需要在多个 crate 之间跳转。
+## Design choices
 
-### 为什么用中文注释？
+### Self-contained instead of framework-heavy
 
-教学目的。中文注释让中文读者更容易理解"为什么"这样设计，而不只是"做了什么"。
+The point is to make the control flow inspectable. The crate therefore does not depend on the larger pigs architecture.
 
-### 为什么用非流式而非流式？
+### Chinese source comments
 
-流式响应需要处理 SSE 事件流和工具参数碎片重组，增加约 200 行复杂代码。教学版优先展示核心逻辑。流式实现可参考 `pigs-llm` crate 的 `openai.rs`。
+The implementation contains detailed Chinese teaching comments explaining **why** the code is structured the way it is, not only what each line does.
 
-## 与参考项目的关系
+### Non-streaming by design
 
-| 参考项目 | 语言 | 本 crate 借鉴了什么 |
-|---|---|---|
-| CoreCoder | Python | 极简循环骨架、工具设计、edit_file 唯一匹配、系统提示词 |
-| claw-code/claw-analog | Rust | Rust Agent 循环模式、工具 match 分发 |
-| codex | Rust | 分层架构理念、消息类型设计 |
-| pigs-core/cli | Rust | 类型安全 enum、thiserror 错误模式 |
+Streaming is useful in production, but it adds transport complexity that is not required to understand tool-using Agent behavior.
 
-## 许可证
+### Explicit bounded loop
 
-MIT
+The Agent defaults to 50 rounds so a bad tool-call cycle cannot continue indefinitely.
+
+---
+
+## Inspirations
+
+The implementation was informed by several Agent / coding-tool architectures:
+
+| Project | Main idea studied |
+|---|---|
+| CoreCoder | Minimal Agent loop, tool design, unique-match editing, prompt structure |
+| claw-code / claw-analog | Rust Agent control-flow patterns |
+| Codex | Layered architecture and message modeling |
+| pigs | Typed Rust patterns and broader Agent-system architecture |
+
+This repository is intended as a small teaching implementation rather than a drop-in reproduction of any one of them.
+
+---
+
+## Tech stack
+
+<div align="center">
+
+<img src="https://img.shields.io/badge/Rust_2021-000000?style=flat-square&logo=rust&logoColor=white" />
+<img src="https://img.shields.io/badge/Tokio-async_runtime-1F6FEB?style=flat-square" />
+<img src="https://img.shields.io/badge/reqwest-HTTP_client-0EA5E9?style=flat-square" />
+<img src="https://img.shields.io/badge/serde-JSON-F59E0B?style=flat-square" />
+<img src="https://img.shields.io/badge/async--trait-async_tools-8B5CF6?style=flat-square" />
+<img src="https://img.shields.io/badge/thiserror-errors-059669?style=flat-square" />
+
+</div>
+
+---
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
+
+For the Chinese version, see **[READMEch.md](./READMEch.md)**.
